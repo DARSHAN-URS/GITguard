@@ -1,20 +1,23 @@
-# GitGuard AI - Week 1: Webhook Listener
+# GitGuard AI - Week 2: Diff Analyzer & Code Preparation
 
-A secure Node.js + Express backend service that receives and validates GitHub webhook requests for Pull Request events.
+A secure Node.js + Express backend service that receives GitHub webhook requests, fetches Pull Request diffs, and prepares cleaned code changes for AI analysis.
 
-## 🎯 Week 1 Objectives
+## 🎯 Week 2 Objectives
 
-- ✅ Securely receive GitHub webhook requests
-- ✅ Listen specifically to Pull Request events
-- ✅ Validate incoming requests using webhook secret
-- ✅ Extract and log essential Pull Request metadata
-- ✅ Ignore unrelated GitHub events
+- ✅ Securely receive GitHub webhook requests (Week 1)
+- ✅ Validate incoming requests using webhook secret (Week 1)
+- ✅ Fetch Pull Request diffs from GitHub API
+- ✅ Extract and clean code changes from diffs
+- ✅ Structure diffs for efficient AI analysis
+- ✅ Detect programming languages
+- ✅ Validate diffs for potential secrets
 
 ## 📋 Prerequisites
 
 - Node.js >= 18.0.0
 - npm or yarn
 - A GitHub repository with webhook access
+- GitHub Personal Access Token (for fetching PR diffs)
 
 ## 🚀 Setup Instructions
 
@@ -24,25 +27,35 @@ A secure Node.js + Express backend service that receives and validates GitHub we
 npm install
 ```
 
+**Dependencies:**
+- `express` - Web framework
+- `dotenv` - Environment variable management
+- `@octokit/rest` - GitHub API client
+
 ### 2. Configure Environment Variables
 
-Copy the example environment file:
+Create a `.env` file in the project root:
 
 ```bash
-cp .env.example .env
-```
-
-Edit `.env` and set your GitHub webhook secret:
-
-```
+# GitHub Webhook Secret
+# Generate a strong random secret: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 GITHUB_WEBHOOK_SECRET=your_strong_random_secret_here
+
+# GitHub Personal Access Token (Required for Week 2)
+# Create token at: https://github.com/settings/tokens
+# Required scopes: repo (for private repos) or public_repo (for public repos)
+GITHUB_TOKEN=your_github_personal_access_token_here
+
+# Server Port (optional, defaults to 3000)
+PORT=3000
+
+# Node Environment (optional)
+NODE_ENV=development
 ```
 
-**Important:** Generate a strong random secret. You can use:
-
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
+**Important:** 
+- Generate a strong random secret for `GITHUB_WEBHOOK_SECRET`
+- Create a GitHub Personal Access Token with appropriate scopes for `GITHUB_TOKEN`
 
 ### 3. Configure GitHub Webhook
 
@@ -75,14 +88,14 @@ The server will start on `http://localhost:3000` (or the port specified in `PORT
 
 ### `POST /github/webhook`
 
-Receives GitHub webhook events and processes Pull Request events.
+Receives GitHub webhook events, fetches PR diffs, and returns cleaned, structured diff data.
 
 **Headers Required:**
 - `X-GitHub-Event`: Event type (must be `pull_request`)
 - `X-Hub-Signature-256`: SHA-256 HMAC signature
 - `X-GitHub-Delivery`: Unique delivery ID
 
-**Response Format:**
+**Response Format (Week 2):**
 
 Success (200 OK):
 ```json
@@ -92,10 +105,17 @@ Success (200 OK):
   "data": {
     "repository": "owner/repo",
     "pullRequestNumber": 123,
-    "title": "Fix bug in authentication",
-    "author": "username",
-    "action": "opened",
-    "receivedAt": "2024-01-15T10:30:00.000Z"
+    "cleanedDiff": [
+      {
+        "filename": "src/utils/helper.js",
+        "language": "javascript",
+        "changes": "// Cleaned code changes only\nfunction newFunction() {\n  return true;\n}",
+        "status": "modified",
+        "additions": 10,
+        "deletions": 5
+      }
+    ],
+    "preparedAt": "2024-01-15T10:30:00.000Z"
   }
 }
 ```
@@ -118,8 +138,26 @@ Health check endpoint.
 - **Header Validation**: Required headers are checked before processing
 - **Event Filtering**: Only `pull_request` events with `opened` or `reopened` actions are processed
 - **Timing-Safe Comparison**: Signature validation uses timing-safe comparison to prevent timing attacks
+- **Secret Detection**: Basic validation to detect potential secrets in diffs
 
-## 📊 Event Processing
+## 📊 Week 2: Diff Processing Pipeline
+
+### 1. Fetch PR Diff
+- Uses GitHub API (Octokit SDK) to fetch Pull Request files
+- Retrieves raw diff patches for all changed files
+- Handles single-file and multi-file PRs
+
+### 2. Extract & Clean Diff
+- Removes diff metadata (headers, line numbers, unchanged lines)
+- Keeps only added/modified code
+- Preserves minimal context for better understanding
+- Handles binary files and large diffs
+
+### 3. Structure for AI
+- Detects programming language from file extensions
+- Organizes changes by file
+- Creates token-efficient output format
+- Validates for potential secrets
 
 ### Processed Events
 - ✅ `pull_request` with action `opened`
@@ -139,15 +177,12 @@ The service uses structured JSON logging for easy parsing and debugging:
 {
   "timestamp": "2024-01-15T10:30:00.000Z",
   "level": "INFO",
-  "message": "Pull request event processed successfully",
+  "message": "Diff processing completed",
   "repository": "owner/repo",
   "pullRequestNumber": 123,
-  "title": "Fix bug",
-  "author": "username",
-  "action": "opened",
-  "receivedAt": "2024-01-15T10:30:00.000Z",
-  "deliveryId": "abc-123-def",
-  "processingTimeMs": 5
+  "filesProcessed": 3,
+  "totalChangesBytes": 1024,
+  "processingTimeMs": 250
 }
 ```
 
@@ -173,8 +208,10 @@ The best way to test is to configure a real GitHub webhook pointing to your serv
 
 ```
 GitGuard/
-├── server.js           # Main Express server
-├── webhookHandler.js   # Webhook validation and PR data extraction
+├── server.js           # Main Express server (Week 1 + Week 2 integration)
+├── webhookHandler.js   # Webhook validation and PR data extraction (Week 1)
+├── diffFetcher.js      # GitHub API integration for fetching PR diffs (Week 2)
+├── diffCleaner.js      # Diff cleaning and structuring (Week 2)
 ├── logger.js          # Structured logging utility
 ├── package.json       # Dependencies and scripts
 ├── .env.example      # Environment variables template
@@ -182,38 +219,59 @@ GitGuard/
 └── README.md         # This file
 ```
 
-## 🔄 Handoff to Week 2
+## 📦 Week 2 Output Format
 
-The extracted Pull Request data follows this format:
+The cleaned diff output follows this structure:
 
 ```json
 {
   "repository": "owner/repo",
   "pullRequestNumber": 123,
-  "title": "PR Title",
-  "author": "username",
-  "action": "opened",
-  "receivedAt": "2024-01-15T10:30:00.000Z"
+  "cleanedDiff": [
+    {
+      "filename": "path/to/file.js",
+      "language": "javascript",
+      "changes": "// Only code changes, no metadata",
+      "status": "modified",
+      "additions": 10,
+      "deletions": 5
+    }
+  ],
+  "preparedAt": "2024-01-15T10:30:00.000Z"
 }
 ```
 
-This structured data is ready for Week 2 modules that will:
-- Fetch Pull Request diffs
+**Features:**
+- Token-efficient (removes unnecessary content)
+- Language-aware (detects programming language)
+- Structured (ready for AI analysis)
+- Validated (checks for potential secrets)
+
+## 🔄 Handoff to Week 3
+
+The cleaned and structured diff data is ready for Week 3 modules that will:
 - Perform AI-based code analysis
-- Post automated review comments
+- Detect bugs, security issues, and performance problems
+- Post automated review comments to GitHub
 
 ## ⚠️ Important Notes
 
-- **No AI Analysis**: Week 1 does NOT perform any AI/LLM analysis
-- **No Diff Fetching**: Week 1 does NOT fetch code diffs
-- **No Comments**: Week 1 does NOT post comments to GitHub
+- **No AI Analysis**: Week 2 does NOT perform any AI/LLM analysis
+- **No Comments**: Week 2 does NOT post comments to GitHub
 - **No Long-term Storage**: Data is only logged, not persisted
+- **Diff Only**: Only fetches and cleans diffs, does not analyze code
 
 ## 🐛 Troubleshooting
 
 ### Webhook signature validation fails
 - Ensure `GITHUB_WEBHOOK_SECRET` in `.env` matches the secret configured in GitHub
 - Check that the raw body is being preserved correctly (Express middleware handles this)
+
+### Diff fetching fails
+- Verify `GITHUB_TOKEN` is set in `.env` file
+- Check that the token has required scopes (`repo` or `public_repo`)
+- Ensure the token has access to the repository
+- Review server logs for detailed error messages
 
 ### Events not being processed
 - Verify the webhook is configured to send `pull_request` events
@@ -224,8 +282,13 @@ This structured data is ready for Week 2 modules that will:
 - Ensure Node.js >= 18.0.0 is installed
 - Check that port 3000 (or your configured port) is available
 - Verify all dependencies are installed (`npm install`)
+- Check for ES module compatibility issues (Octokit uses dynamic imports)
+
+### Empty or missing diffs
+- Verify the PR has actual code changes
+- Check that files are not binary or too large (GitHub may not provide patches)
+- Review logs for API rate limiting or permission issues
 
 ## 📄 License
 
 MIT
-
