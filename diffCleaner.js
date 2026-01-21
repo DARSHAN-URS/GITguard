@@ -226,7 +226,7 @@ function cleanAndStructureDiff(rawDiff, files = []) {
     
     const processingTime = Date.now() - startTime;
     
-    logger.info('Diff cleaned and structured', {
+    logger.info('🧹 Diff cleaned and structured', {
       totalFiles: cleanedFiles.length,
       totalChangesBytes: totalChanges,
       processingTimeMs: processingTime

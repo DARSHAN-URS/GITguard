@@ -31,7 +31,7 @@ app.post('/github/webhook', async (req, res) => {
     const signature = req.headers['x-hub-signature-256'];
     const deliveryId = req.headers['x-github-delivery'];
     
-    logger.info('Webhook received', {
+    logger.info('📥 Webhook received', {
       eventType,
       deliveryId,
       timestamp: new Date().toISOString()
@@ -112,7 +112,7 @@ app.post('/github/webhook', async (req, res) => {
       const cleanedDiffData = cleanAndStructureDiff(rawDiff, files);
       cleanedDiff = cleanedDiffData.files;
       
-      logger.info('Diff processing completed', {
+      logger.info('✨ Diff processing completed', {
         repository: prData.repository,
         pullRequestNumber: prData.pullRequestNumber,
         filesProcessed: cleanedDiffData.totalFiles,
@@ -146,11 +146,16 @@ app.post('/github/webhook', async (req, res) => {
     
     // Log successful processing
     const processingTime = Date.now() - startTime;
-    logger.info('Pull request event processed successfully', {
-      ...prData,
+    logger.info('✅ Pull request event processed successfully', {
+      repository: prData.repository,
+      pullRequestNumber: prData.pullRequestNumber,
+      title: prData.title,
+      author: prData.author,
+      action: prData.action,
       deliveryId,
       processingTimeMs: processingTime,
-      diffFiles: cleanedDiff.length
+      diffFiles: cleanedDiff.length,
+      receivedAt: prData.receivedAt
     });
     
     // Return Week 2 formatted response
@@ -188,18 +193,20 @@ app.use((err, req, res, next) => {
 
 // Start server
 app.listen(PORT, () => {
-  logger.info('GitGuard AI Webhook Listener started', {
+  console.log('\n' + '='.repeat(60));
+  logger.info('🚀 GitGuard AI Webhook Listener started', {
     port: PORT,
     environment: process.env.NODE_ENV || 'development',
     endpoint: `/github/webhook`
   });
+  console.log('='.repeat(60) + '\n');
   
   if (!process.env.GITHUB_WEBHOOK_SECRET) {
-    logger.warn('WARNING: GITHUB_WEBHOOK_SECRET not set. Webhook validation will fail.');
+    logger.warn('⚠️  WARNING: GITHUB_WEBHOOK_SECRET not set. Webhook validation will fail.');
   }
   
   if (!process.env.GITHUB_TOKEN) {
-    logger.warn('WARNING: GITHUB_TOKEN not set. Diff fetching will fail.');
+    logger.warn('⚠️  WARNING: GITHUB_TOKEN not set. Diff fetching will fail.');
   }
 });
 

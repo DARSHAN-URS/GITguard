@@ -37,7 +37,7 @@ async function fetchPullRequestDiff(repository, pullRequestNumber, githubToken) 
       throw new Error(`Invalid repository format: ${repository}. Expected format: owner/repo`);
     }
     
-    logger.info('Fetching PR diff from GitHub API', {
+    logger.info('📥 Fetching PR diff from GitHub API', {
       repository,
       pullRequestNumber,
       owner,
@@ -79,7 +79,7 @@ async function fetchPullRequestDiff(repository, pullRequestNumber, githubToken) 
     const fetchTime = Date.now() - startTime;
     const diffSize = Buffer.byteLength(diff, 'utf8');
     
-    logger.info('PR diff fetched successfully', {
+    logger.info('✅ PR diff fetched successfully', {
       repository,
       pullRequestNumber,
       diffSizeBytes: diffSize,
