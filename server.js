@@ -3,6 +3,7 @@ const express = require('express');
 const { validateWebhookSignature, extractPullRequestData } = require('./webhookHandler');
 const { fetchPullRequestDiff, fetchPullRequestFiles } = require('./diffFetcher');
 const { cleanAndStructureDiff } = require('./diffCleaner');
+const { generateStructuredPrompt } = require('./promptGenerator');
 const logger = require('./logger');
 
 const app = express();
@@ -19,6 +20,24 @@ app.use(express.json({
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', service: 'GitGuard AI Webhook Listener' });
+});
+
+// Store last generated prompt for viewing
+let lastPrompt = null;
+
+// Endpoint to view last generated prompt (for testing/debugging)
+app.get('/prompt/last', (req, res) => {
+  if (!lastPrompt) {
+    return res.status(404).json({ 
+      error: 'No prompt generated yet',
+      message: 'Send a webhook request first to generate a prompt'
+    });
+  }
+  
+  res.status(200).json({
+    success: true,
+    prompt: lastPrompt
+  });
 });
 
 // GitHub webhook endpoint
@@ -136,11 +155,46 @@ app.post('/github/webhook', async (req, res) => {
       });
     }
     
-    // Week 2 Output Format
+    // Generate LLM prompt with cleaned diffs
+    const promptFormat = process.env.PROMPT_FORMAT || 'full'; // 'full' or 'compact'
+    const llmPrompt = generateStructuredPrompt(prData, cleanedDiff, promptFormat);
+    
+    if (!llmPrompt) {
+      logger.warn('Failed to generate LLM prompt', {
+        repository: prData.repository,
+        pullRequestNumber: prData.pullRequestNumber
+      });
+    } else {
+      // Log the generated prompt for visibility
+      logger.info('📝 LLM Prompt Generated', {
+        repository: prData.repository,
+        pullRequestNumber: prData.pullRequestNumber,
+        format: llmPrompt.format,
+        estimatedTokens: llmPrompt.estimatedTokens,
+        fileCount: llmPrompt.fileCount
+      });
+      
+      // Output prompt to console (for debugging/viewing)
+      if (process.env.LOG_PROMPT === 'true' || process.env.NODE_ENV === 'development') {
+        console.log('\n' + '='.repeat(80));
+        console.log('📝 GENERATED LLM PROMPT:');
+        console.log('='.repeat(80));
+        console.log(llmPrompt.prompt);
+        console.log('='.repeat(80) + '\n');
+      }
+    }
+    
+    // Store prompt for /prompt/last endpoint
+    if (llmPrompt) {
+      lastPrompt = llmPrompt;
+    }
+    
+    // Week 2 Output Format (with LLM prompt)
     const week2Output = {
       repository: prData.repository,
       pullRequestNumber: prData.pullRequestNumber,
       cleanedDiff: cleanedDiff,
+      llmPrompt: llmPrompt,
       preparedAt: new Date().toISOString()
     };
     
@@ -155,6 +209,7 @@ app.post('/github/webhook', async (req, res) => {
       deliveryId,
       processingTimeMs: processingTime,
       diffFiles: cleanedDiff.length,
+      estimatedTokens: llmPrompt?.estimatedTokens || 0,
       receivedAt: prData.receivedAt
     });
     
