@@ -4,6 +4,7 @@ const { validateWebhookSignature, extractPullRequestData } = require('./webhookH
 const { fetchPullRequestDiff, fetchPullRequestFiles } = require('./diffFetcher');
 const { cleanAndStructureDiff } = require('./diffCleaner');
 const { generateStructuredPrompt } = require('./promptGenerator');
+const { sendToLLM } = require('./llmClient');
 const logger = require('./logger');
 
 const app = express();
@@ -189,12 +190,47 @@ app.post('/github/webhook', async (req, res) => {
       lastPrompt = llmPrompt;
     }
     
-    // Week 2 Output Format (with LLM prompt)
+    // Send prompt to Groq LLM (if configured)
+    let llmResponse = null;
+    const groqKey = process.env.GROQ_API_KEY;
+    
+    if (llmPrompt && groqKey) {
+      try {
+        llmResponse = await sendToLLM(llmPrompt.prompt, groqKey);
+        
+        logger.info('✅ LLM Analysis Complete', {
+          repository: prData.repository,
+          pullRequestNumber: prData.pullRequestNumber,
+          provider: llmResponse.provider,
+          model: llmResponse.model,
+          tokensUsed: llmResponse.usage.totalTokens
+        });
+      } catch (error) {
+        logger.error('Error calling LLM', {
+          repository: prData.repository,
+          pullRequestNumber: prData.pullRequestNumber,
+          error: error.message
+        });
+        // Don't fail the webhook if LLM call fails
+        llmResponse = {
+          error: error.message,
+          provider: 'groq'
+        };
+      }
+    } else if (llmPrompt && !groqKey) {
+      logger.warn('LLM prompt generated but GROQ_API_KEY not configured', {
+        repository: prData.repository,
+        pullRequestNumber: prData.pullRequestNumber
+      });
+    }
+    
+    // Week 2 Output Format (with LLM prompt and response)
     const week2Output = {
       repository: prData.repository,
       pullRequestNumber: prData.pullRequestNumber,
       cleanedDiff: cleanedDiff,
       llmPrompt: llmPrompt,
+      llmResponse: llmResponse,
       preparedAt: new Date().toISOString()
     };
     
