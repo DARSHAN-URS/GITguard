@@ -1,6 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const { validateWebhookSignature, extractPullRequestData } = require('./webhookHandler');
+const { fetchPullRequestDiff, fetchPullRequestFiles } = require('./diffFetcher');
+const { cleanAndStructureDiff } = require('./diffCleaner');
 const logger = require('./logger');
 
 const app = express();
@@ -87,19 +89,75 @@ app.post('/github/webhook', async (req, res) => {
       });
     }
     
+    // Week 2: Fetch and process PR diff
+    const githubToken = process.env.GITHUB_TOKEN;
+    if (!githubToken) {
+      logger.error('GITHUB_TOKEN not configured');
+      return res.status(500).json({ 
+        error: 'Server configuration error',
+        message: 'GITHUB_TOKEN is required for diff fetching'
+      });
+    }
+    
+    let cleanedDiff = [];
+    
+    try {
+      // Fetch PR diff and files metadata
+      const [rawDiff, files] = await Promise.all([
+        fetchPullRequestDiff(prData.repository, prData.pullRequestNumber, githubToken),
+        fetchPullRequestFiles(prData.repository, prData.pullRequestNumber, githubToken)
+      ]);
+      
+      // Clean and structure the diff
+      const cleanedDiffData = cleanAndStructureDiff(rawDiff, files);
+      cleanedDiff = cleanedDiffData.files;
+      
+      logger.info('Diff processing completed', {
+        repository: prData.repository,
+        pullRequestNumber: prData.pullRequestNumber,
+        filesProcessed: cleanedDiffData.totalFiles,
+        totalChangesBytes: cleanedDiffData.totalChanges
+      });
+      
+    } catch (error) {
+      logger.error('Error fetching or cleaning diff', {
+        repository: prData.repository,
+        pullRequestNumber: prData.pullRequestNumber,
+        error: error.message,
+        stack: error.stack
+      });
+      
+      // Return error but don't fail the webhook - log the issue
+      return res.status(500).json({
+        error: 'Failed to fetch or process PR diff',
+        message: error.message,
+        repository: prData.repository,
+        pullRequestNumber: prData.pullRequestNumber
+      });
+    }
+    
+    // Week 2 Output Format
+    const week2Output = {
+      repository: prData.repository,
+      pullRequestNumber: prData.pullRequestNumber,
+      cleanedDiff: cleanedDiff,
+      preparedAt: new Date().toISOString()
+    };
+    
     // Log successful processing
     const processingTime = Date.now() - startTime;
     logger.info('Pull request event processed successfully', {
       ...prData,
       deliveryId,
-      processingTimeMs: processingTime
+      processingTimeMs: processingTime,
+      diffFiles: cleanedDiff.length
     });
     
-    // Return success response
+    // Return Week 2 formatted response
     res.status(200).json({
       success: true,
       message: 'Webhook processed successfully',
-      data: prData
+      data: week2Output
     });
     
   } catch (error) {
@@ -138,6 +196,10 @@ app.listen(PORT, () => {
   
   if (!process.env.GITHUB_WEBHOOK_SECRET) {
     logger.warn('WARNING: GITHUB_WEBHOOK_SECRET not set. Webhook validation will fail.');
+  }
+  
+  if (!process.env.GITHUB_TOKEN) {
+    logger.warn('WARNING: GITHUB_TOKEN not set. Diff fetching will fail.');
   }
 });
 
