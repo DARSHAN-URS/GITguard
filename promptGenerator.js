@@ -4,9 +4,10 @@ const logger = require('./logger');
  * Generates an LLM prompt for code review analysis with cleaned diffs
  * @param {Object} prData - Pull request metadata
  * @param {Array} cleanedDiff - Array of cleaned file diffs
+ * @param {Object} settings - Repository settings (Week 4)
  * @returns {string} - Formatted LLM prompt
  */
-function generateLLMPrompt(prData, cleanedDiff) {
+function generateLLMPrompt(prData, cleanedDiff, settings = {}) {
   try {
     if (!cleanedDiff || cleanedDiff.length === 0) {
       logger.warn('No cleaned diff available for prompt generation');
@@ -24,14 +25,53 @@ function generateLLMPrompt(prData, cleanedDiff) {
     prompt += `- **Author:** ${prData.author}\n`;
     prompt += `- **Action:** ${prData.action}\n\n`;
 
-    // Instructions for LLM
+    // Instructions for LLM (Week 3 Requirements + Week 4 Settings)
     prompt += `## Review Instructions\n`;
-    prompt += `Please analyze the following code changes and provide a comprehensive code review focusing on:\n`;
-    prompt += `1. **Code Quality**: Best practices, readability, maintainability\n`;
-    prompt += `2. **Security**: Potential vulnerabilities, security best practices\n`;
-    prompt += `3. **Performance**: Optimization opportunities, efficiency concerns\n`;
-    prompt += `4. **Bugs**: Potential errors, edge cases, logic issues\n`;
-    prompt += `5. **Documentation**: Missing comments, unclear code\n\n`;
+    prompt += `Analyze ONLY the changed code below and generate actionable review feedback suitable for posting directly as a GitHub Pull Request review comment.\n\n`;
+    
+    // Week 4: Apply repository settings
+    if (settings.strictMode) {
+      prompt += `**⚠️ STRICT MODE ENABLED:** Be more thorough and flag even minor issues.\n\n`;
+    }
+    
+    prompt += `**Focus Areas:**\n`;
+    prompt += `1. **Bugs**: Logical errors, incorrect conditions, edge-case failures, broken functionality\n`;
+    prompt += `2. **Security**: Hardcoded secrets, unsafe input handling, injection vulnerabilities, insecure API usage\n`;
+    prompt += `3. **Performance**: Inefficient loops, unnecessary computations, redundant API calls, bottlenecks\n`;
+    
+    // Week 4: Conditionally include Quality based on settings
+    if (!settings.ignoreStyling && !settings.ignoreLinter) {
+      prompt += `4. **Quality**: Readability, maintainability, error handling, best practices\n\n`;
+    } else {
+      prompt += `4. **Quality**: Readability, maintainability, error handling, best practices\n`;
+      prompt += `   ${settings.ignoreStyling ? '⚠️ **IGNORE STYLING ISSUES** - Skip formatting/style checks\n' : ''}`;
+      prompt += `   ${settings.ignoreLinter ? '⚠️ **IGNORE LINTER ISSUES** - Skip linter warnings\n' : ''}`;
+      prompt += `\n`;
+    }
+    
+    prompt += `**Output Format:** For each issue found, provide:\n`;
+    prompt += `- **Title**: Short, descriptive title\n`;
+    prompt += `- **Type**: One of: Bug, Security, Performance, or Quality\n`;
+    prompt += `- **Explanation**: Clear explanation of the issue\n`;
+    prompt += `- **Suggested Fix**: Minimal corrected code snippet (only relevant changed lines)\n\n`;
+    prompt += `**Constraints:**\n`;
+    prompt += `- Do NOT analyze unchanged code\n`;
+    prompt += `- Do NOT invent problems or assume missing context\n`;
+    prompt += `- Do NOT include sensitive information\n`;
+    
+    // Week 4: Apply ignore settings
+    if (settings.ignoreStyling) {
+      prompt += `- Do NOT flag formatting, indentation, or style-only issues\n`;
+    }
+    if (settings.ignoreLinter) {
+      prompt += `- Do NOT flag linter warnings or code style violations\n`;
+    }
+    if (!settings.ignoreStyling && !settings.ignoreLinter) {
+      prompt += `- Do NOT focus on minor formatting/style-only issues unless they impact correctness\n`;
+    }
+    
+    prompt += `- Keep explanations concise and developer-friendly\n\n`;
+    prompt += `**No-Issue Case:** If no critical issues are found, explicitly state: "✅ No critical issues detected. The code meets acceptable standards for correctness, security, and performance."\n\n`;
 
     // Code Changes
     prompt += `## Code Changes\n\n`;
@@ -53,13 +93,8 @@ function generateLLMPrompt(prData, cleanedDiff) {
     }
 
     // Analysis Request
-    prompt += `## Analysis Request\n\n`;
-    prompt += `Please provide:\n`;
-    prompt += `1. **Summary**: Brief overview of the changes\n`;
-    prompt += `2. **Issues Found**: List any bugs, security concerns, or code quality issues\n`;
-    prompt += `3. **Suggestions**: Recommendations for improvement\n`;
-    prompt += `4. **Positive Feedback**: What was done well\n`;
-    prompt += `5. **Priority**: Mark critical issues that should be addressed before merging\n\n`;
+    prompt += `## Review Output\n\n`;
+    prompt += `Provide your review feedback in the format specified above. Format your response using GitHub-flavored Markdown for readability.\n\n`;
 
     prompt += `---\n`;
     prompt += `*Generated by GitGuard AI - Automated Code Review System*\n`;
@@ -79,9 +114,10 @@ function generateLLMPrompt(prData, cleanedDiff) {
  * Generates a compact LLM prompt (token-efficient version)
  * @param {Object} prData - Pull request metadata
  * @param {Array} cleanedDiff - Array of cleaned file diffs
+ * @param {Object} settings - Repository settings (Week 4)
  * @returns {string} - Compact formatted LLM prompt
  */
-function generateCompactLLMPrompt(prData, cleanedDiff) {
+function generateCompactLLMPrompt(prData, cleanedDiff, settings = {}) {
   try {
     if (!cleanedDiff || cleanedDiff.length === 0) {
       return null;
@@ -114,13 +150,14 @@ function generateCompactLLMPrompt(prData, cleanedDiff) {
  * @param {Object} prData - Pull request metadata
  * @param {Array} cleanedDiff - Array of cleaned file diffs
  * @param {string} format - 'full' or 'compact'
+ * @param {Object} settings - Repository settings (Week 4)
  * @returns {Object} - Structured prompt data
  */
-function generateStructuredPrompt(prData, cleanedDiff, format = 'full') {
+function generateStructuredPrompt(prData, cleanedDiff, format = 'full', settings = {}) {
   try {
     const promptText = format === 'compact' 
-      ? generateCompactLLMPrompt(prData, cleanedDiff)
-      : generateLLMPrompt(prData, cleanedDiff);
+      ? generateCompactLLMPrompt(prData, cleanedDiff, settings)
+      : generateLLMPrompt(prData, cleanedDiff, settings);
 
     if (!promptText) {
       return null;

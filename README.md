@@ -1,14 +1,18 @@
-# GitGuard AI - Week 2: Diff Analyzer & Code Preparation
+# GitGuard AI - Automated Code Reviewer
 
-A Node.js + Express service that receives GitHub webhooks, fetches PR diffs, cleans code changes, and generates LLM-ready prompts for automated code review.
+A Node.js + Express service that receives GitHub webhooks, analyzes PR diffs using AI (Groq/Llama 3), and posts automated review comments. Includes a dashboard for managing repository settings and viewing review history.
 
 ## 🎯 Features
 
 - ✅ Secure webhook validation (HMAC SHA-256)
 - ✅ Fetch PR diffs from GitHub API (Octokit)
 - ✅ Clean and structure diffs (remove metadata, keep code)
-- ✅ Generate LLM prompts with cleaned diffs
-- ✅ Language detection and secret validation
+- ✅ AI-powered code review (Groq/Llama 3)
+- ✅ Automated GitHub PR review comments
+- ✅ **Dashboard & Settings** (Week 4):
+  - Toggle rules per repository (Strict Mode, Ignore Styling/Linter)
+  - Review history log
+  - Statistics and analytics
 
 ## 📋 Prerequisites
 
@@ -27,6 +31,8 @@ Create `.env` file:
 ```bash
 GITHUB_WEBHOOK_SECRET=your_webhook_secret
 GITHUB_TOKEN=your_github_token
+GROQ_API_KEY=your_groq_api_key
+COMMENT_BOT_ENABLED=true
 PORT=3000
 ```
 
@@ -84,6 +90,21 @@ Health check endpoint.
 ### `GET /prompt/last`
 View the last generated LLM prompt.
 
+### `GET /` (Dashboard)
+Access the web dashboard for managing repository settings and viewing review history.
+
+### `GET /api/dashboard/settings`
+Get all repository settings.
+
+### `PUT /api/dashboard/settings/:repository`
+Update repository settings (strictMode, ignoreStyling, ignoreLinter, enabled).
+
+### `GET /api/dashboard/history`
+Get review history with optional filters.
+
+### `GET /api/dashboard/statistics`
+Get review statistics.
+
 ## 🔄 Processing Pipeline
 
 1. **Webhook Validation** → Verify signature and headers
@@ -124,7 +145,15 @@ GitGuard/
 ├── diffFetcher.js      # GitHub API integration
 ├── diffCleaner.js      # Diff cleaning & structuring
 ├── promptGenerator.js  # LLM prompt generation
-├── logger.js          # Structured logging
+├── llmClient.js        # LLM API integration (Groq)
+├── commentBot.js       # GitHub review comment posting
+├── storage.js          # Repository settings & history storage
+├── dashboard.js        # Dashboard API routes
+├── logger.js           # Structured logging
+├── public/             # Dashboard web interface
+│   ├── index.html
+│   ├── styles.css
+│   └── dashboard.js
 └── package.json
 ```
 
@@ -135,11 +164,25 @@ GitGuard/
 - Event filtering (only `pull_request` opened/reopened)
 - Secret detection in diffs
 
-## ⚠️ Important Notes
+## 📊 Dashboard Features (Week 4)
 
-- **No AI Analysis**: Week 2 only prepares data, doesn't analyze
-- **No GitHub Comments**: Week 2 doesn't post comments
-- **LLM Ready**: Output is formatted for Week 3 AI analysis
+Access the dashboard at `http://localhost:3000` after starting the server.
+
+**Repository Settings:**
+- **Strict Mode**: More aggressive code review
+- **Ignore Styling**: Skip formatting/style checks
+- **Ignore Linter**: Skip linter warnings
+- **Enable/Disable**: Toggle reviews per repository
+
+**Review History:**
+- View all past reviews
+- Filter by repository
+- See review details and timestamps
+
+**Statistics:**
+- Total reviews count
+- Issues by type (Bug, Security, Performance, Quality)
+- Repository statistics
 
 ## 🐛 Troubleshooting
 

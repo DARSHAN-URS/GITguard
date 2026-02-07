@@ -34,3 +34,5 @@ coverage/
 dist/
 build/
 
+# Data storage (Week 4)
+data/

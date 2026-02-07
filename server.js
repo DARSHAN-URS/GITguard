@@ -1,14 +1,23 @@
 require('dotenv').config();
 const express = require('express');
+const path = require('path');
 const { validateWebhookSignature, extractPullRequestData } = require('./webhookHandler');
 const { fetchPullRequestDiff, fetchPullRequestFiles } = require('./diffFetcher');
 const { cleanAndStructureDiff } = require('./diffCleaner');
 const { generateStructuredPrompt } = require('./promptGenerator');
 const { sendToLLM } = require('./llmClient');
+const { postReviewComment } = require('./commentBot');
+const { getRepositorySettings, saveReviewHistory, initializeStorage } = require('./storage');
+const dashboardRoutes = require('./dashboard');
 const logger = require('./logger');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Initialize storage on startup
+initializeStorage().catch(err => {
+  logger.error('Failed to initialize storage', { error: err.message });
+});
 
 // Middleware: Parse JSON bodies
 app.use(express.json({
@@ -17,6 +26,21 @@ app.use(express.json({
     req.rawBody = buf;
   }
 }));
+
+// Explicit routes for main pages (must come before static middleware)
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.get('/dashboard.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
+});
+
+// Serve static files (CSS, JS, images, etc.)
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Dashboard API routes
+app.use(dashboardRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -109,6 +133,22 @@ app.post('/github/webhook', async (req, res) => {
       });
     }
     
+    // Week 4: Check repository settings
+    const repoSettings = await getRepositorySettings(prData.repository);
+    
+    if (!repoSettings.enabled) {
+      logger.info('Repository reviews disabled', {
+        repository: prData.repository,
+        pullRequestNumber: prData.pullRequestNumber
+      });
+      return res.status(200).json({
+        success: true,
+        message: 'Webhook received but reviews are disabled for this repository',
+        repository: prData.repository,
+        settings: repoSettings
+      });
+    }
+    
     // Week 2: Fetch and process PR diff
     const githubToken = process.env.GITHUB_TOKEN;
     if (!githubToken) {
@@ -156,9 +196,9 @@ app.post('/github/webhook', async (req, res) => {
       });
     }
     
-    // Generate LLM prompt with cleaned diffs
+    // Generate LLM prompt with cleaned diffs (Week 4: respect repository settings)
     const promptFormat = process.env.PROMPT_FORMAT || 'full'; // 'full' or 'compact'
-    const llmPrompt = generateStructuredPrompt(prData, cleanedDiff, promptFormat);
+    const llmPrompt = generateStructuredPrompt(prData, cleanedDiff, promptFormat, repoSettings);
     
     if (!llmPrompt) {
       logger.warn('Failed to generate LLM prompt', {
@@ -222,6 +262,52 @@ app.post('/github/webhook', async (req, res) => {
         repository: prData.repository,
         pullRequestNumber: prData.pullRequestNumber
       });
+    }
+
+    // Week 3: Optional comment bot – post LLM review back to GitHub
+    const commentBotEnabled = process.env.COMMENT_BOT_ENABLED === 'true';
+    if (commentBotEnabled && llmResponse && !llmResponse.error) {
+      const githubTokenForComments = process.env.GITHUB_TOKEN;
+      
+      if (!githubTokenForComments) {
+        logger.warn('Comment bot enabled but GITHUB_TOKEN not configured for posting comments', {
+          repository: prData.repository,
+          pullRequestNumber: prData.pullRequestNumber
+        });
+      } else {
+        // Wrap LLM response in a Markdown review body
+        const reviewBody = [
+          `## 🤖 GitGuard AI Review`,
+          ``,
+          `**PR:** ${prData.repository} #${prData.pullRequestNumber}`,
+          `**Title:** ${prData.title}`,
+          `**Author:** ${prData.author}`,
+          ``,
+          `---`,
+          ``,
+          llmResponse.response
+        ].join('\n');
+
+        const reviewResult = await postReviewComment({
+          repository: prData.repository,
+          pullRequestNumber: prData.pullRequestNumber,
+          reviewBody,
+          githubToken: githubTokenForComments
+        });
+        
+        // Week 4: Save review history
+        if (reviewResult) {
+          await saveReviewHistory({
+            repository: prData.repository,
+            pullRequestNumber: prData.pullRequestNumber,
+            title: prData.title,
+            author: prData.author,
+            reviewBody: reviewBody,
+            llmResponse: llmResponse,
+            settings: repoSettings
+          });
+        }
+      }
     }
     
     // Week 2 Output Format (with LLM prompt and response)

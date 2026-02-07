@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitGuard AI - Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 GitGuard AI Dashboard</h1>
+            <p>Manage repository settings and view review history</p>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab-btn active" data-tab="settings">⚙️ Repository Settings</button>
+            <button class="tab-btn" data-tab="history">📜 Review History</button>
+            <button class="tab-btn" data-tab="statistics">📊 Statistics</button>
+        </nav>
+
+        <!-- Settings Tab -->
+        <div id="settings-tab" class="tab-content active">
+            <div class="section-header">
+                <h2>Repository Settings</h2>
+                <button id="refresh-settings" class="btn-secondary">🔄 Refresh</button>
+            </div>
+            
+            <div id="settings-list" class="settings-list">
+                <div class="loading">Loading settings...</div>
+            </div>
+
+            <div class="add-repo-section">
+                <h3>Add/Update Repository</h3>
+                <div class="form-group">
+                    <input type="text" id="repo-input" placeholder="owner/repo (e.g., DARSHAN-URS/GITguard)" class="input">
+                    <button id="add-repo-btn" class="btn-primary">Add Repository</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- History Tab -->
+        <div id="history-tab" class="tab-content">
+            <div class="section-header">
+                <h2>Review History</h2>
+                <div class="filter-group">
+                    <select id="history-repo-filter" class="select">
+                        <option value="">All Repositories</option>
+                    </select>
+                    <button id="refresh-history" class="btn-secondary">🔄 Refresh</button>
+                </div>
+            </div>
+            
+            <div id="history-list" class="history-list">
+                <div class="loading">Loading history...</div>
+            </div>
+        </div>
+
+        <!-- Statistics Tab -->
+        <div id="statistics-tab" class="tab-content">
+            <div class="section-header">
+                <h2>Review Statistics</h2>
+                <select id="stats-repo-filter" class="select">
+                    <option value="">All Repositories</option>
+                </select>
+            </div>
+            
+            <div id="statistics-content" class="statistics-content">
+                <div class="loading">Loading statistics...</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="dashboard.js"></script>
+</body>
+</html>
