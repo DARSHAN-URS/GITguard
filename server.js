@@ -1,23 +1,33 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const connectDB = require('./db');
+const { reviewQueue, connection: redisConnection } = require('./queue');
+const startWorker = require('./worker');
 const { validateWebhookSignature, extractPullRequestData } = require('./webhookHandler');
-const { fetchPullRequestDiff, fetchPullRequestFiles } = require('./diffFetcher');
-const { cleanAndStructureDiff } = require('./diffCleaner');
-const { generateStructuredPrompt } = require('./promptGenerator');
-const { sendToLLM } = require('./llmClient');
-const { postReviewComment } = require('./commentBot');
-const { getRepositorySettings, saveReviewHistory, initializeStorage } = require('./storage');
+const { getRepositorySettings } = require('./storage');
 const dashboardRoutes = require('./dashboard');
 const logger = require('./logger');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Initialize storage on startup
-initializeStorage().catch(err => {
-  logger.error('Failed to initialize storage', { error: err.message });
+// Connect to Database
+connectDB();
+
+// Start BullMQ Worker
+startWorker(redisConnection);
+
+// Production Middleware
+app.use(helmet());
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: { error: 'Too many requests, please try again later.' }
 });
+app.use('/api/', limiter);
 
 // Middleware: Parse JSON bodies
 app.use(express.json({
@@ -50,15 +60,98 @@ app.get('/health', (req, res) => {
 // Store last generated prompt for viewing
 let lastPrompt = null;
 
+// Track processed webhooks to prevent duplicates (in-memory cache)
+// In production, consider using Redis or a database
+const processedWebhooks = new Map();
+const WEBHOOK_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * Aggregates multiple LLM responses into a single review
+ * @param {Array<Object>} responses - Array of LLM responses
+ * @param {Object} prData - Pull request metadata
+ * @param {number} totalFiles - Total number of files
+ * @returns {Object} - Aggregated response
+ */
+function aggregateLLMResponses(responses, prData, totalFiles) {
+  const successful = responses.filter(r => !r.failed && r.response);
+  const failed = responses.filter(r => r.failed);
+
+  if (successful.length === 0) {
+    return {
+      error: 'All LLM calls failed',
+      provider: 'groq',
+      failedCount: failed.length
+    };
+  }
+
+  // Group responses by file
+  const fileGroups = new Map();
+  for (const response of successful) {
+    const filename = response.filename || 'unknown';
+    if (!fileGroups.has(filename)) {
+      fileGroups.set(filename, []);
+    }
+    fileGroups.get(filename).push(response);
+  }
+
+  // Aggregate reviews by file
+  const fileReviews = [];
+  for (const [filename, fileResponses] of fileGroups.entries()) {
+    // If file was chunked, combine chunks
+    if (fileResponses.length > 1) {
+      const sorted = fileResponses.sort((a, b) => (a.chunkIndex || 0) - (b.chunkIndex || 0));
+      const combined = sorted.map(r => r.response).join('\n\n---\n\n');
+      fileReviews.push(`### ${filename}\n\n${combined}`);
+    } else {
+      fileReviews.push(`### ${filename}\n\n${fileResponses[0].response}`);
+    }
+  }
+
+  // Build aggregated review
+  let aggregatedReview = fileReviews.join('\n\n---\n\n');
+
+  // Add summary if many files or partial review
+  const reviewedFiles = fileGroups.size;
+  let partialReview = null;
+
+  if (reviewedFiles < totalFiles) {
+    partialReview = `Reviewed ${reviewedFiles} of ${totalFiles} files. Some files were skipped due to size constraints.`;
+    aggregatedReview = `⚠️ **Partial Review Notice:** ${partialReview}\n\n---\n\n${aggregatedReview}`;
+  }
+
+  // Calculate total usage
+  const totalUsage = successful.reduce((acc, r) => {
+    if (r.usage) {
+      acc.promptTokens += r.usage.promptTokens || 0;
+      acc.completionTokens += r.usage.completionTokens || 0;
+      acc.totalTokens += r.usage.totalTokens || 0;
+    }
+    return acc;
+  }, { promptTokens: 0, completionTokens: 0, totalTokens: 0 });
+
+  return {
+    provider: successful[0].provider || 'groq',
+    model: successful[0].model || 'unknown',
+    aggregatedReview,
+    partialReview,
+    usage: totalUsage,
+    fileCount: reviewedFiles,
+    totalFiles,
+    responsesProcessed: successful.length,
+    failedCount: failed.length,
+    receivedAt: new Date().toISOString()
+  };
+}
+
 // Endpoint to view last generated prompt (for testing/debugging)
 app.get('/prompt/last', (req, res) => {
   if (!lastPrompt) {
-    return res.status(404).json({ 
+    return res.status(404).json({
       error: 'No prompt generated yet',
       message: 'Send a webhook request first to generate a prompt'
     });
   }
-  
+
   res.status(200).json({
     success: true,
     prompt: lastPrompt
@@ -66,305 +159,69 @@ app.get('/prompt/last', (req, res) => {
 });
 
 // GitHub webhook endpoint
-app.post('/github/webhook', async (req, res) => {
-  const startTime = Date.now();
-  
+app.post('/github/webhook', async (req, res, next) => {
   try {
-    // Extract required headers
     const eventType = req.headers['x-github-event'];
     const signature = req.headers['x-hub-signature-256'];
     const deliveryId = req.headers['x-github-delivery'];
-    
-    logger.info('📥 Webhook received', {
-      eventType,
-      deliveryId,
-      timestamp: new Date().toISOString()
-    });
-    
-    // Validate required headers
+
     if (!eventType || !signature || !deliveryId) {
-      logger.warn('Missing required headers', {
-        eventType: !!eventType,
-        signature: !!signature,
-        deliveryId: !!deliveryId
-      });
-      return res.status(400).json({
-        error: 'Missing required headers',
-        required: ['X-GitHub-Event', 'X-Hub-Signature-256', 'X-GitHub-Delivery']
-      });
+      return res.status(400).json({ error: 'Missing required headers' });
     }
-    
-    // Validate webhook signature
+
     const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
-    if (!webhookSecret) {
-      logger.error('GITHUB_WEBHOOK_SECRET not configured');
-      return res.status(500).json({ error: 'Server configuration error' });
-    }
-    
-    const isValidSignature = validateWebhookSignature(
-      req.rawBody,
-      signature,
-      webhookSecret
-    );
-    
-    if (!isValidSignature) {
-      logger.warn('Invalid webhook signature', { deliveryId });
+    if (!validateWebhookSignature(req.rawBody, signature, webhookSecret)) {
       return res.status(401).json({ error: 'Invalid signature' });
     }
-    
-    // Filter events: Only process pull_request events
+
     if (eventType !== 'pull_request') {
-      logger.info('Event ignored (not a pull_request)', { eventType, deliveryId });
-      return res.status(200).json({
-        message: 'Event received but ignored',
-        eventType,
-        reason: 'Only pull_request events are processed'
-      });
+      return res.status(200).json({ message: 'Event ignored (not a pull_request)' });
     }
-    
-    // Extract and validate pull request data
+
     const prData = extractPullRequestData(req.body);
-    
     if (!prData) {
-      logger.warn('Invalid pull request event data', { deliveryId });
-      return res.status(400).json({
-        error: 'Invalid pull request event data',
-        reason: 'Missing required fields or unsupported action'
-      });
+      return res.status(400).json({ error: 'Invalid pull request data' });
     }
-    
-    // Week 4: Check repository settings
+
     const repoSettings = await getRepositorySettings(prData.repository);
-    
     if (!repoSettings.enabled) {
-      logger.info('Repository reviews disabled', {
-        repository: prData.repository,
-        pullRequestNumber: prData.pullRequestNumber
-      });
-      return res.status(200).json({
-        success: true,
-        message: 'Webhook received but reviews are disabled for this repository',
-        repository: prData.repository,
-        settings: repoSettings
-      });
-    }
-    
-    // Week 2: Fetch and process PR diff
-    const githubToken = process.env.GITHUB_TOKEN;
-    if (!githubToken) {
-      logger.error('GITHUB_TOKEN not configured');
-      return res.status(500).json({ 
-        error: 'Server configuration error',
-        message: 'GITHUB_TOKEN is required for diff fetching'
-      });
-    }
-    
-    let cleanedDiff = [];
-    
-    try {
-      // Fetch PR diff and files metadata
-      const [rawDiff, files] = await Promise.all([
-        fetchPullRequestDiff(prData.repository, prData.pullRequestNumber, githubToken),
-        fetchPullRequestFiles(prData.repository, prData.pullRequestNumber, githubToken)
-      ]);
-      
-      // Clean and structure the diff
-      const cleanedDiffData = cleanAndStructureDiff(rawDiff, files);
-      cleanedDiff = cleanedDiffData.files;
-      
-      logger.info('✨ Diff processing completed', {
-        repository: prData.repository,
-        pullRequestNumber: prData.pullRequestNumber,
-        filesProcessed: cleanedDiffData.totalFiles,
-        totalChangesBytes: cleanedDiffData.totalChanges
-      });
-      
-    } catch (error) {
-      logger.error('Error fetching or cleaning diff', {
-        repository: prData.repository,
-        pullRequestNumber: prData.pullRequestNumber,
-        error: error.message,
-        stack: error.stack
-      });
-      
-      // Return error but don't fail the webhook - log the issue
-      return res.status(500).json({
-        error: 'Failed to fetch or process PR diff',
-        message: error.message,
-        repository: prData.repository,
-        pullRequestNumber: prData.pullRequestNumber
-      });
-    }
-    
-    // Generate LLM prompt with cleaned diffs (Week 4: respect repository settings)
-    const promptFormat = process.env.PROMPT_FORMAT || 'full'; // 'full' or 'compact'
-    const llmPrompt = generateStructuredPrompt(prData, cleanedDiff, promptFormat, repoSettings);
-    
-    if (!llmPrompt) {
-      logger.warn('Failed to generate LLM prompt', {
-        repository: prData.repository,
-        pullRequestNumber: prData.pullRequestNumber
-      });
-    } else {
-      // Log the generated prompt for visibility
-      logger.info('📝 LLM Prompt Generated', {
-        repository: prData.repository,
-        pullRequestNumber: prData.pullRequestNumber,
-        format: llmPrompt.format,
-        estimatedTokens: llmPrompt.estimatedTokens,
-        fileCount: llmPrompt.fileCount
-      });
-      
-      // Output prompt to console (for debugging/viewing)
-      if (process.env.LOG_PROMPT === 'true' || process.env.NODE_ENV === 'development') {
-        console.log('\n' + '='.repeat(80));
-        console.log('📝 GENERATED LLM PROMPT:');
-        console.log('='.repeat(80));
-        console.log(llmPrompt.prompt);
-        console.log('='.repeat(80) + '\n');
-      }
-    }
-    
-    // Store prompt for /prompt/last endpoint
-    if (llmPrompt) {
-      lastPrompt = llmPrompt;
-    }
-    
-    // Send prompt to Groq LLM (if configured)
-    let llmResponse = null;
-    const groqKey = process.env.GROQ_API_KEY;
-    
-    if (llmPrompt && groqKey) {
-      try {
-        llmResponse = await sendToLLM(llmPrompt.prompt, groqKey);
-        
-        logger.info('✅ LLM Analysis Complete', {
-          repository: prData.repository,
-          pullRequestNumber: prData.pullRequestNumber,
-          provider: llmResponse.provider,
-          model: llmResponse.model,
-          tokensUsed: llmResponse.usage.totalTokens
-        });
-      } catch (error) {
-        logger.error('Error calling LLM', {
-          repository: prData.repository,
-          pullRequestNumber: prData.pullRequestNumber,
-          error: error.message
-        });
-        // Don't fail the webhook if LLM call fails
-        llmResponse = {
-          error: error.message,
-          provider: 'groq'
-        };
-      }
-    } else if (llmPrompt && !groqKey) {
-      logger.warn('LLM prompt generated but GROQ_API_KEY not configured', {
-        repository: prData.repository,
-        pullRequestNumber: prData.pullRequestNumber
-      });
+      return res.status(200).json({ success: true, message: 'Reviews disabled for this repository' });
     }
 
-    // Week 3: Optional comment bot – post LLM review back to GitHub
-    const commentBotEnabled = process.env.COMMENT_BOT_ENABLED === 'true';
-    if (commentBotEnabled && llmResponse && !llmResponse.error) {
-      const githubTokenForComments = process.env.GITHUB_TOKEN;
-      
-      if (!githubTokenForComments) {
-        logger.warn('Comment bot enabled but GITHUB_TOKEN not configured for posting comments', {
-          repository: prData.repository,
-          pullRequestNumber: prData.pullRequestNumber
-        });
-      } else {
-        // Wrap LLM response in a Markdown review body
-        const reviewBody = [
-          `## 🤖 GitGuard AI Review`,
-          ``,
-          `**PR:** ${prData.repository} #${prData.pullRequestNumber}`,
-          `**Title:** ${prData.title}`,
-          `**Author:** ${prData.author}`,
-          ``,
-          `---`,
-          ``,
-          llmResponse.response
-        ].join('\n');
-
-        const reviewResult = await postReviewComment({
-          repository: prData.repository,
-          pullRequestNumber: prData.pullRequestNumber,
-          reviewBody,
-          githubToken: githubTokenForComments
-        });
-        
-        // Week 4: Save review history
-        if (reviewResult) {
-          await saveReviewHistory({
-            repository: prData.repository,
-            pullRequestNumber: prData.pullRequestNumber,
-            title: prData.title,
-            author: prData.author,
-            reviewBody: reviewBody,
-            llmResponse: llmResponse,
-            settings: repoSettings
-          });
-        }
-      }
-    }
-    
-    // Week 2 Output Format (with LLM prompt and response)
-    const week2Output = {
-      repository: prData.repository,
-      pullRequestNumber: prData.pullRequestNumber,
-      cleanedDiff: cleanedDiff,
-      llmPrompt: llmPrompt,
-      llmResponse: llmResponse,
-      preparedAt: new Date().toISOString()
-    };
-    
-    // Log successful processing
-    const processingTime = Date.now() - startTime;
-    logger.info('✅ Pull request event processed successfully', {
-      repository: prData.repository,
-      pullRequestNumber: prData.pullRequestNumber,
-      title: prData.title,
-      author: prData.author,
-      action: prData.action,
-      deliveryId,
-      processingTimeMs: processingTime,
-      diffFiles: cleanedDiff.length,
-      estimatedTokens: llmPrompt?.estimatedTokens || 0,
-      receivedAt: prData.receivedAt
+    // Add job to background queue
+    await reviewQueue.add(`review-${deliveryId}`, { prData, deliveryId }, {
+      removeOnComplete: true,
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 1000 }
     });
-    
-    // Return Week 2 formatted response
-    res.status(200).json({
+
+    res.status(202).json({
       success: true,
-      message: 'Webhook processed successfully',
-      data: week2Output
+      message: 'Review queued for background processing',
+      deliveryId
     });
-    
+
   } catch (error) {
-    logger.error('Error processing webhook', {
-      error: error.message,
-      stack: error.stack,
-      deliveryId: req.headers['x-github-delivery']
-    });
-    
-    res.status(500).json({
-      error: 'Internal server error',
-      message: 'Failed to process webhook'
-    });
+    next(error);
   }
 });
 
-// Error handling middleware
+// Centralized Error Handler
 app.use((err, req, res, next) => {
-  logger.error('Express error handler', {
-    error: err.message,
-    stack: err.stack
+  const statusCode = err.statusCode || 500;
+  const message = err.message || 'Internal Server Error';
+
+  logger.error('Centralized Error Handler', {
+    error: message,
+    stack: err.stack,
+    path: req.path,
+    method: req.method
   });
-  
-  res.status(500).json({
-    error: 'Internal server error'
+
+  res.status(statusCode).json({
+    success: false,
+    error: message,
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -376,12 +233,20 @@ app.listen(PORT, () => {
     environment: process.env.NODE_ENV || 'development',
     endpoint: `/github/webhook`
   });
-  console.log('='.repeat(60) + '\n');
-  
+  console.log('='.repeat(60));
+  console.log('\n📊 Dashboard & Web Interface:');
+  console.log(`   → Landing Page: http://localhost:${PORT}/`);
+  console.log(`   → Dashboard:    http://localhost:${PORT}/dashboard.html`);
+  console.log('\n🔗 API Endpoints:');
+  console.log(`   → Webhook:      http://localhost:${PORT}/github/webhook`);
+  console.log(`   → Health Check: http://localhost:${PORT}/health`);
+  console.log(`   → Last Prompt:  http://localhost:${PORT}/prompt/last`);
+  console.log('\n' + '='.repeat(60) + '\n');
+
   if (!process.env.GITHUB_WEBHOOK_SECRET) {
     logger.warn('⚠️  WARNING: GITHUB_WEBHOOK_SECRET not set. Webhook validation will fail.');
   }
-  
+
   if (!process.env.GITHUB_TOKEN) {
     logger.warn('⚠️  WARNING: GITHUB_TOKEN not set. Diff fetching will fail.');
   }

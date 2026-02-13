@@ -1,62 +1,40 @@
-const fs = require('fs').promises;
-const path = require('path');
+const Repository = require('./models/Repository');
+const Review = require('./models/Review');
+const ReviewIssue = require('./models/ReviewIssue');
+const UsageMetrics = require('./models/UsageMetrics');
 const logger = require('./logger');
 
-const STORAGE_DIR = path.join(__dirname, 'data');
-const SETTINGS_FILE = path.join(STORAGE_DIR, 'repository-settings.json');
-const HISTORY_FILE = path.join(STORAGE_DIR, 'review-history.json');
-
-// Ensure storage directory exists
-async function ensureStorageDir() {
-  try {
-    await fs.mkdir(STORAGE_DIR, { recursive: true });
-  } catch (error) {
-    logger.error('Error creating storage directory', { error: error.message });
-    throw error;
-  }
-}
-
-// Initialize default files if they don't exist
-async function initializeStorage() {
-  await ensureStorageDir();
-  
-  try {
-    await fs.access(SETTINGS_FILE);
-  } catch {
-    await fs.writeFile(SETTINGS_FILE, JSON.stringify({}, null, 2));
-    logger.info('Initialized repository settings file');
-  }
-  
-  try {
-    await fs.access(HISTORY_FILE);
-  } catch {
-    await fs.writeFile(HISTORY_FILE, JSON.stringify([], null, 2));
-    logger.info('Initialized review history file');
-  }
+/**
+ * Normalize repository name
+ */
+function normalizeRepository(repository) {
+  if (!repository) return '';
+  return repository.trim().toLowerCase();
 }
 
 /**
- * Get repository settings (defaults if not set)
- * @param {string} repository - Repository in "owner/repo" format
- * @returns {Promise<Object>} Repository settings
+ * Get repository settings
  */
 async function getRepositorySettings(repository) {
-  await initializeStorage();
-  
   try {
-    const data = await fs.readFile(SETTINGS_FILE, 'utf8');
-    const settings = JSON.parse(data);
-    
-    // Return repository-specific settings or defaults
-    return settings[repository] || {
-      strictMode: false,
-      ignoreStyling: false,
-      ignoreLinter: false,
-      enabled: true
-    };
+    const normalizedRepo = normalizeRepository(repository);
+    let repo = await Repository.findOne({ name: normalizedRepo });
+
+    if (!repo) {
+      repo = await Repository.create({
+        name: normalizedRepo,
+        settings: {
+          strictMode: false,
+          ignoreStyling: false,
+          ignoreLinter: false,
+          enabled: true
+        }
+      });
+    }
+
+    return repo.settings;
   } catch (error) {
-    logger.error('Error reading repository settings', { error: error.message });
-    // Return defaults on error
+    logger.error('Error getting repository settings', { error: error.message });
     return {
       strictMode: false,
       ignoreStyling: false,
@@ -68,61 +46,42 @@ async function getRepositorySettings(repository) {
 
 /**
  * Update repository settings
- * @param {string} repository - Repository in "owner/repo" format
- * @param {Object} updates - Settings to update
- * @returns {Promise<Object>} Updated settings
  */
 async function updateRepositorySettings(repository, updates) {
-  await initializeStorage();
-  
   try {
-    const data = await fs.readFile(SETTINGS_FILE, 'utf8');
-    const settings = JSON.parse(data);
-    
-    // Initialize repository if not exists
-    if (!settings[repository]) {
-      settings[repository] = {
-        strictMode: false,
-        ignoreStyling: false,
-        ignoreLinter: false,
-        enabled: true
-      };
-    }
-    
-    // Update settings
-    settings[repository] = {
-      ...settings[repository],
-      ...updates,
-      updatedAt: new Date().toISOString()
-    };
-    
-    await fs.writeFile(SETTINGS_FILE, JSON.stringify(settings, null, 2));
-    
-    logger.info('Repository settings updated', {
-      repository,
-      updates
-    });
-    
-    return settings[repository];
+    const normalizedRepo = normalizeRepository(repository);
+    const repo = await Repository.findOneAndUpdate(
+      { name: normalizedRepo },
+      {
+        $set: {
+          'settings.strictMode': updates.strictMode,
+          'settings.ignoreStyling': updates.ignoreStyling,
+          'settings.ignoreLinter': updates.ignoreLinter,
+          'settings.enabled': updates.enabled
+        }
+      },
+      { new: true, upsert: true }
+    );
+
+    logger.info('Repository settings updated', { repository: normalizedRepo, updates });
+    return repo.settings;
   } catch (error) {
-    logger.error('Error updating repository settings', {
-      repository,
-      error: error.message
-    });
+    logger.error('Error updating repository settings', { repository, error: error.message });
     throw error;
   }
 }
 
 /**
  * Get all repository settings
- * @returns {Promise<Object>} All repository settings
  */
 async function getAllRepositorySettings() {
-  await initializeStorage();
-  
   try {
-    const data = await fs.readFile(SETTINGS_FILE, 'utf8');
-    return JSON.parse(data);
+    const repos = await Repository.find({});
+    const settingsMap = {};
+    repos.forEach(repo => {
+      settingsMap[repo.name] = repo.settings;
+    });
+    return settingsMap;
   } catch (error) {
     logger.error('Error reading all repository settings', { error: error.message });
     return {};
@@ -131,67 +90,95 @@ async function getAllRepositorySettings() {
 
 /**
  * Save review history entry
- * @param {Object} reviewData - Review data to save
- * @returns {Promise<void>}
  */
 async function saveReviewHistory(reviewData) {
-  await initializeStorage();
-  
   try {
-    const data = await fs.readFile(HISTORY_FILE, 'utf8');
-    const history = JSON.parse(data);
-    
-    const entry = {
-      id: `review-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      ...reviewData,
-      createdAt: new Date().toISOString()
-    };
-    
-    history.unshift(entry); // Add to beginning
-    
-    // Keep only last 1000 reviews (prevent file from growing too large)
-    if (history.length > 1000) {
-      history.splice(1000);
-    }
-    
-    await fs.writeFile(HISTORY_FILE, JSON.stringify(history, null, 2));
-    
-    logger.info('Review history saved', {
-      repository: reviewData.repository,
-      pullRequestNumber: reviewData.pullRequestNumber,
-      reviewId: entry.id
+    const { repository, pullRequestNumber, title, author, llmResponse } = reviewData;
+
+    // Create the main review document
+    const review = await Review.create({
+      repository: normalizeRepository(repository),
+      pullRequestNumber,
+      title,
+      author,
+      summary: llmResponse.summary || '',
+      riskScore: llmResponse.risk_score || 0,
+      status: 'completed',
+      usage: llmResponse.usage,
+      processingTimeMs: llmResponse.processingTimeMs
     });
+
+    // Store issues as separate documents if they exist
+    if (llmResponse.issues && Array.isArray(llmResponse.issues)) {
+      const issueDocs = llmResponse.issues.map(issue => ({
+        reviewId: review._id,
+        repository: normalizeRepository(repository),
+        pullRequestNumber,
+        file: issue.file || 'unknown',
+        line: issue.line,
+        type: issue.type || 'Quality',
+        severity: issue.severity || 'Medium',
+        title: issue.title || 'Review Issue',
+        message: issue.message || '',
+        suggestion: issue.suggestion || ''
+      }));
+
+      await ReviewIssue.insertMany(issueDocs);
+    }
+
+    // Update usage metrics
+    const currentMonth = new Date().toISOString().substring(0, 7); // YYYY-MM
+    await UsageMetrics.findOneAndUpdate(
+      { repository: normalizeRepository(repository), month: currentMonth },
+      {
+        $inc: {
+          totalTokens: llmResponse.usage.totalTokens || 0,
+          promptTokens: llmResponse.usage.promptTokens || 0,
+          completionTokens: llmResponse.usage.completionTokens || 0,
+          reviewCount: 1
+        },
+        $set: { lastReviewAt: new Date() }
+      },
+      { upsert: true }
+    );
+
+    logger.info('Review history and metrics saved to MongoDB', {
+      repository,
+      pullRequestNumber,
+      reviewId: review._id
+    });
+
+    return review;
   } catch (error) {
-    logger.error('Error saving review history', {
+    logger.error('Error saving review history or metrics to MongoDB', {
       error: error.message,
       repository: reviewData.repository
     });
-    // Don't throw - history saving shouldn't break reviews
   }
 }
 
 /**
  * Get review history
- * @param {Object} filters - Optional filters (repository, limit, offset)
- * @returns {Promise<Array>} Review history entries
  */
 async function getReviewHistory(filters = {}) {
-  await initializeStorage();
-  
   try {
-    const data = await fs.readFile(HISTORY_FILE, 'utf8');
-    let history = JSON.parse(data);
-    
-    // Filter by repository if specified
+    const query = {};
     if (filters.repository) {
-      history = history.filter(entry => entry.repository === filters.repository);
+      query.repository = normalizeRepository(filters.repository);
     }
-    
-    // Apply pagination
+
     const offset = filters.offset || 0;
     const limit = filters.limit || 50;
-    
-    return history.slice(offset, offset + limit);
+
+    const reviews = await Review.find(query)
+      .sort({ createdAt: -1 })
+      .skip(offset)
+      .limit(limit)
+      .lean();
+
+    // For each review, we might want to attach issues if requested
+    // But for the basic history list, summary and risk score might be enough
+    return reviews;
   } catch (error) {
     logger.error('Error reading review history', { error: error.message });
     return [];
@@ -200,42 +187,41 @@ async function getReviewHistory(filters = {}) {
 
 /**
  * Get review statistics
- * @param {string} repository - Optional repository filter
- * @returns {Promise<Object>} Statistics
  */
 async function getReviewStatistics(repository = null) {
-  await initializeStorage();
-  
   try {
-    const data = await fs.readFile(HISTORY_FILE, 'utf8');
-    let history = JSON.parse(data);
-    
+    const query = {};
     if (repository) {
-      history = history.filter(entry => entry.repository === repository);
+      query.repository = normalizeRepository(repository);
     }
-    
-    const total = history.length;
+
+    const totalReviews = await Review.countDocuments(query);
+
+    // Use aggregation to count issues by type
+    const issueStats = await ReviewIssue.aggregate([
+      { $match: repository ? { repository: normalizeRepository(repository) } : {} },
+      { $group: { _id: '$type', count: { $sum: 1 } } }
+    ]);
+
     const byType = {
       Bug: 0,
       Security: 0,
       Performance: 0,
       Quality: 0
     };
-    
-    history.forEach(entry => {
-      if (entry.issues && Array.isArray(entry.issues)) {
-        entry.issues.forEach(issue => {
-          if (issue.type && byType[issue.type] !== undefined) {
-            byType[issue.type]++;
-          }
-        });
+
+    issueStats.forEach(stat => {
+      if (byType[stat._id] !== undefined) {
+        byType[stat._id] = stat.count;
       }
     });
-    
+
+    const repoCount = repository ? 1 : (await Repository.countDocuments({}));
+
     return {
-      totalReviews: total,
+      totalReviews,
       issuesByType: byType,
-      repositories: repository ? 1 : new Set(history.map(h => h.repository)).size
+      repositories: repoCount
     };
   } catch (error) {
     logger.error('Error calculating review statistics', { error: error.message });
@@ -245,6 +231,14 @@ async function getReviewStatistics(repository = null) {
       repositories: 0
     };
   }
+}
+
+/**
+ * Legacy support for initialization - now just ensures connection
+ */
+async function initializeStorage() {
+  // Connection is handled by db.js
+  return Promise.resolve();
 }
 
 module.exports = {
