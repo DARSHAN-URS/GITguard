@@ -12,21 +12,21 @@ function validateWebhookSignature(rawBody, signature, secret) {
   try {
     // GitHub sends signature as "sha256=<hash>"
     const expectedSignature = signature.replace('sha256=', '');
-    
+
     // Calculate HMAC SHA-256
     const hmac = crypto.createHmac('sha256', secret);
     hmac.update(rawBody);
     const calculatedSignature = hmac.digest('hex');
-    
+
     // Convert to buffers for comparison
     const expectedBuffer = Buffer.from(expectedSignature, 'hex');
     const calculatedBuffer = Buffer.from(calculatedSignature, 'hex');
-    
+
     // Ensure buffers are same length (timingSafeEqual requires this)
     if (expectedBuffer.length !== calculatedBuffer.length) {
       return false;
     }
-    
+
     // Use timing-safe comparison to prevent timing attacks
     return crypto.timingSafeEqual(expectedBuffer, calculatedBuffer);
   } catch (error) {
@@ -51,11 +51,11 @@ function extractPullRequestData(payload) {
       });
       return null;
     }
-    
+
     const action = payload.action;
     const pr = payload.pull_request;
     const repo = payload.repository;
-    
+
     // Only process 'opened' and 'reopened' actions
     const allowedActions = ['opened', 'reopened'];
     if (!allowedActions.includes(action)) {
@@ -65,7 +65,7 @@ function extractPullRequestData(payload) {
       });
       return null;
     }
-    
+
     // Extract required fields
     const prData = {
       repository: repo.full_name || repo.name || '',
@@ -73,17 +73,18 @@ function extractPullRequestData(payload) {
       title: pr.title || '',
       author: pr.user?.login || '',
       action: action,
+      installationId: payload.installation?.id, // Added for GitHub App
       receivedAt: new Date().toISOString()
     };
-    
+
     // Validate extracted data
     if (!prData.repository || !prData.pullRequestNumber || !prData.title || !prData.author) {
       logger.warn('Missing required PR fields', { prData });
       return null;
     }
-    
+
     return prData;
-    
+
   } catch (error) {
     logger.error('Error extracting PR data', {
       error: error.message,

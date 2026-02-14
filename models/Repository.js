@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const repositorySchema = new mongoose.Schema({
     name: { type: String, required: true, unique: true }, // "owner/repo"
     githubId: Number,
+    installationId: { type: Number }, // For GitHub App Integration
     owner: String,
     settings: {
         strictMode: { type: Boolean, default: false },

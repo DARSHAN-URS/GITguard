@@ -11,7 +11,7 @@ function checkAuth() {
         window.location.href = '/';
         return false;
     }
-    
+
     try {
         const authData = JSON.parse(auth);
         // Check if session is still valid (24 hours)
@@ -42,10 +42,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!checkAuth()) {
         return;
     }
-    
+
     // Add logout button to header
     addLogoutButton();
-    
+
     setupTabs();
     loadSettings();
     loadHistory();
@@ -72,31 +72,31 @@ function setupTabs() {
     const tabBtns = document.querySelectorAll('.tab-btn');
     const tabContents = document.querySelectorAll('.tab-content');
     const tabsContainer = document.querySelector('.tabs');
-    
+
     tabBtns.forEach(btn => {
         btn.addEventListener('click', () => {
             const targetTab = btn.dataset.tab;
-            
+
             // Update buttons
             tabBtns.forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            
+
             // Update tabs container data attribute for CSS animation
             if (tabsContainer) {
                 tabsContainer.setAttribute('data-active', targetTab);
             }
-            
+
             // Update content
             tabContents.forEach(content => content.classList.remove('active'));
             document.getElementById(`${targetTab}-tab`).classList.add('active');
-            
+
             // Refresh data when switching tabs
             if (targetTab === 'settings') loadSettings();
             if (targetTab === 'history') loadHistory();
             if (targetTab === 'statistics') loadStatistics();
         });
     });
-    
+
     // Set initial active tab
     if (tabsContainer) {
         tabsContainer.setAttribute('data-active', 'settings');
@@ -107,34 +107,21 @@ function setupTabs() {
 function setupEventListeners() {
     const refreshSettings = document.getElementById('refresh-settings');
     const refreshHistory = document.getElementById('refresh-history');
-    const addRepoBtn = document.getElementById('add-repo-btn');
-    const historyFilter = document.getElementById('history-repo-filter');
-    const statsFilter = document.getElementById('stats-repo-filter');
-    const repoInput = document.getElementById('repo-input');
-    
     if (refreshSettings) refreshSettings.addEventListener('click', loadSettings);
     if (refreshHistory) refreshHistory.addEventListener('click', loadHistory);
-    if (addRepoBtn) addRepoBtn.addEventListener('click', addRepository);
     if (historyFilter) historyFilter.addEventListener('change', loadHistory);
     if (statsFilter) statsFilter.addEventListener('change', loadStatistics);
-    
-    // Enter key on repo input
-    if (repoInput) {
-        repoInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') addRepository();
-        });
-    }
 }
 
 // Load repository settings
 async function loadSettings() {
     const container = document.getElementById('settings-list');
     container.innerHTML = '<div class="loading">Loading settings...</div>';
-    
+
     try {
         const response = await fetch('/api/dashboard/settings');
         const data = await response.json();
-        
+
         if (data.success) {
             allSettings = data.settings;
             renderSettings(data.settings);
@@ -151,7 +138,7 @@ async function loadSettings() {
 // Render settings
 function renderSettings(settings) {
     const container = document.getElementById('settings-list');
-    
+
     if (Object.keys(settings).length === 0) {
         container.innerHTML = `
             <div class="empty-state">
@@ -161,7 +148,7 @@ function renderSettings(settings) {
         `;
         return;
     }
-    
+
     container.innerHTML = Object.entries(settings).map(([repo, config]) => `
         <div class="repo-card" data-repo="${repo}">
             <div class="repo-header">
@@ -216,7 +203,7 @@ function renderSettings(settings) {
             </div>
         </div>
     `).join('');
-    
+
     // Attach event listeners to toggles
     container.querySelectorAll('.toggle-switch input').forEach(toggle => {
         toggle.addEventListener('change', (e) => {
@@ -235,16 +222,16 @@ async function updateSetting(repository, setting, value) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ [setting]: value })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
             // Update local state
             if (!allSettings[repository]) {
                 allSettings[repository] = {};
             }
             allSettings[repository][setting] = value;
-            
+
             // Show success feedback
             showNotification(`Setting updated: ${setting} = ${value}`, 'success');
         } else {
@@ -259,50 +246,20 @@ async function updateSetting(repository, setting, value) {
     }
 }
 
-// Add repository
-async function addRepository() {
-    const input = document.getElementById('repo-input');
-    const repo = input.value.trim();
-    
-    if (!repo || !repo.includes('/')) {
-        showNotification('Invalid repository format. Use: owner/repo', 'error');
-        return;
-    }
-    
-    try {
-        const response = await fetch(`/api/dashboard/settings/${encodeURIComponent(repo)}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: true })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            input.value = '';
-            showNotification(`Repository ${repo} added`, 'success');
-            loadSettings();
-        } else {
-            showNotification('Failed to add repository', 'error');
-        }
-    } catch (error) {
-        console.error('Error adding repository:', error);
-        showNotification('Error adding repository', 'error');
-    }
-}
+
 
 // Load review history
 async function loadHistory() {
     const container = document.getElementById('history-list');
     const repoFilter = document.getElementById('history-repo-filter').value;
-    
+
     container.innerHTML = '<div class="loading">Loading history...</div>';
-    
+
     try {
         const url = `/api/dashboard/history${repoFilter ? `?repository=${encodeURIComponent(repoFilter)}` : ''}`;
         const response = await fetch(url);
         const data = await response.json();
-        
+
         if (data.success) {
             allHistory = data.history;
             renderHistory(data.history);
@@ -318,7 +275,7 @@ async function loadHistory() {
 // Render history
 function renderHistory(history) {
     const container = document.getElementById('history-list');
-    
+
     if (!history || history.length === 0) {
         container.innerHTML = `
             <div class="empty-state">
@@ -328,11 +285,11 @@ function renderHistory(history) {
         `;
         return;
     }
-    
+
     container.innerHTML = history.map(entry => {
         const reviewContent = entry.reviewBody || entry.llmResponse?.response || entry.response || 'No review content';
         const createdAt = entry.createdAt ? new Date(entry.createdAt).toLocaleString() : 'Unknown date';
-        
+
         return `
         <div class="history-item">
             <div class="history-header">
@@ -355,14 +312,14 @@ function renderHistory(history) {
 async function loadStatistics() {
     const container = document.getElementById('statistics-content');
     const repoFilter = document.getElementById('stats-repo-filter').value;
-    
+
     container.innerHTML = '<div class="loading">Loading statistics...</div>';
-    
+
     try {
         const url = `/api/dashboard/statistics${repoFilter ? `?repository=${encodeURIComponent(repoFilter)}` : ''}`;
         const response = await fetch(url);
         const data = await response.json();
-        
+
         if (data.success) {
             renderStatistics(data.statistics);
         } else {
@@ -377,15 +334,15 @@ async function loadStatistics() {
 // Render statistics
 function renderStatistics(stats) {
     const container = document.getElementById('statistics-content');
-    
+
     // Handle missing or undefined stats
     if (!stats) {
         container.innerHTML = '<div class="empty-state">No statistics available</div>';
         return;
     }
-    
+
     const issuesByType = stats.issuesByType || { Bug: 0, Security: 0, Performance: 0, Quality: 0 };
-    
+
     container.innerHTML = `
         <div class="stat-card">
             <h3>${stats.totalReviews || 0}</h3>
@@ -421,7 +378,7 @@ function updateRepoFilters() {
     const repos = Object.keys(allSettings);
     const historyFilter = document.getElementById('history-repo-filter');
     const statsFilter = document.getElementById('stats-repo-filter');
-    
+
     const updateFilter = (select) => {
         const currentValue = select.value;
         select.innerHTML = '<option value="">All Repositories</option>' +
@@ -430,7 +387,7 @@ function updateRepoFilters() {
             select.value = currentValue;
         }
     };
-    
+
     updateFilter(historyFilter);
     updateFilter(statsFilter);
 }
@@ -445,15 +402,15 @@ function escapeHtml(text) {
 function showNotification(message, type = 'info') {
     const notification = document.createElement('div');
     notification.className = `notification ${type}`;
-    
+
     const icon = type === 'success' ? '✓' : '✗';
     notification.innerHTML = `
         <span style="font-size: 1.25rem; font-weight: bold;">${icon}</span>
         <span>${message}</span>
     `;
-    
+
     document.body.appendChild(notification);
-    
+
     setTimeout(() => {
         notification.style.animation = 'slideOut 0.3s ease-out';
         notification.style.opacity = '0';

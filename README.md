@@ -1,203 +1,129 @@
-# GitGuard AI - Automated Code Reviewer
+# 🛡️ GitGuard AI Elite
 
-A Node.js + Express service that receives GitHub webhooks, analyzes PR diffs using AI (Groq/Llama 3), and posts automated review comments. Includes a dashboard for managing repository settings and viewing review history.
+**Enterprise-Grade Automated GitHub Code Review & Security Guardrail**
 
-## 🎯 Features
+GitGuard AI Elite is a production-ready, scalable MERN-stack platform that automates pull request reviews using advanced LLMs (Llama 3 via Groq). It features a background job processing architecture, GitHub App integration, automated policy enforcement, and deep repository analytics.
 
-- ✅ Secure webhook validation (HMAC SHA-256)
-- ✅ Fetch PR diffs from GitHub API (Octokit)
-- ✅ Clean and structure diffs (remove metadata, keep code)
-- ✅ AI-powered code review (Groq/Llama 3)
-- ✅ Automated GitHub PR review comments
-- ✅ **Dashboard & Settings** (Week 4):
-  - Toggle rules per repository (Strict Mode, Ignore Styling/Linter)
-  - Review history log
-  - Statistics and analytics
+---
+
+## 🚀 Key Features
+
+### 1. Elite Intelligence & Review
+- **LLM-Powered Analysis**: Strict structured JSON reviews via Groq (Llama 3).
+- **Deterministic Risk Scoring**: Score PRs (0-100) based on weighted issue categories (Security, Bug, Performance, Quality).
+- **Inline GitHub Comments**: Posts actionable feedback directly to the code lines in the PR.
+- **Diff Sanitization**: Advanced cleaning of raw diffs to optimize token usage and context relevance.
+
+### 2. Enterprise Scalability
+- **BullMQ Background Processing**: Decoupled webhook handling and review processing using Redis and BullMQ.
+- **GitHub App Integration**: Secure, multitenant authentication using Installation Access Tokens and JWT signing.
+- **Incremental Layered Architecture**: Clean separation of Controllers, Services, Models, and Workers.
+
+### 3. Policy & Governance (NEW)
+- **Policy Engine**: Define rules to automatically **BLOCK** PRs (using `REQUEST_CHANGES`) if they exceed risk thresholds.
+- **Security Guardrails**: Automated blocking of PRs containing high-severity security vulnerabilities.
+- **Compliant Development**: Enforce issue count limits per PR.
+
+### 4. RBAC & Security
+- **Role-Based Access Control**:
+  - `Admin`: Full control over settings and blocking policies.
+  - `Developer`: Dashboard access and manual review triggers.
+  - `Viewer`: Read-only access to reviews and analytics.
+- **Production Hardened**: Rate limiting, Helmet security headers, and centralized error handling.
+
+### 5. Analytics & Dashboard
+- **Risk Trends**: Aggregated monthly risk score and PR volume trends via Mongo Aggregation.
+- **Issue Distribution**: Breakdown of issue categories (Security, Performance, etc.) over time.
+- **Management UI**: React-based dashboard for policy configuration and review history.
+
+---
+
+## 🏗️ Architecture
+
+```text
+├── controllers/      # Webhook handling and API endpoints
+├── services/         # Business logic (GitHub App, LLM, Review, Analytics)
+├── models/           # MongoDB schemas (Repository, Review, Issue, Policy, User)
+├── workers/          # BullMQ background job processors
+├── queues/           # BullMQ queue configurations
+├── utils/            # Shared utilities (Logger, DB, Diff Cleaners)
+└── server.js         # Entry point (Middleware & Routing)
+```
+
+---
 
 ## 📋 Prerequisites
 
-- Node.js >= 18.0.0
-- GitHub Personal Access Token (with `repo` or `public_repo` scope)
+- **Node.js**: >= 18.0.0
+- **MongoDB**: Active connection (Atlas or Local)
+- **Redis**: For BullMQ queue management
+- **GitHub App**: Created and installed on repositories
+- **Groq API Key**: For Llama 3 analysis
 
-## 🚀 Quick Start
+---
 
-### 1. Install & Configure
+## 🛠️ Setup & Installation
 
+### 1. Environment Configuration
+Create a `.env` file in the root:
+
+```bash
+# General
+PORT=3000
+MONGODB_URI=mongodb://localhost:27017/gitguard
+REDIS_URL=redis://127.0.0.1:6379
+
+# GitHub App Configuration
+GITHUB_APP_ID=your_app_id
+GITHUB_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+GITHUB_WEBHOOK_SECRET=your_secret
+
+# AI Configuration
+GROQ_API_KEY=your_groq_key
+GROQ_MODEL=llama-3.1-8b-instant
+
+# Auth (Mocked for Elite Demo)
+# X-USER-ROLE: admin | developer | viewer
+```
+
+### 2. Install Dependencies
 ```bash
 npm install
 ```
 
-Create `.env` file:
+### 3. Start the Platform
 ```bash
-GITHUB_WEBHOOK_SECRET=your_webhook_secret
-GITHUB_TOKEN=your_github_token
-GROQ_API_KEY=your_groq_api_key
-COMMENT_BOT_ENABLED=true
-PORT=3000
+# In production
+npm start
+
+# In development (Worker + Server)
+npm run dev
 ```
 
-Generate webhook secret:
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
-
-### 2. Configure GitHub Webhook
-
-1. Repository → Settings → Webhooks → Add webhook
-2. Payload URL: `https://your-domain.com/github/webhook` (use ngrok for local: `ngrok http 3000`)
-3. Content type: `application/json`
-4. Secret: Same as `GITHUB_WEBHOOK_SECRET`
-5. Events: Select "Pull requests" only
-
-### 3. Start Server
-
-```bash
-npm start          # Production
-npm run dev        # Development (auto-reload)
-```
+---
 
 ## 📡 API Endpoints
 
-### `POST /github/webhook`
-Receives PR webhooks, fetches diffs, and returns cleaned data with LLM prompt.
+### GitHub Integration
+- `POST /github/webhook`: Ingests PR events and enqueues jobs.
 
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "repository": "owner/repo",
-    "pullRequestNumber": 123,
-    "cleanedDiff": [
-      {
-        "filename": "src/file.js",
-        "language": "javascript",
-        "changes": "// cleaned code only"
-      }
-    ],
-    "llmPrompt": {
-      "prompt": "# Code Review Request...",
-      "format": "full",
-      "estimatedTokens": 1500
-    }
-  }
-}
-```
+### Dashboard & Analytics
+- `GET /api/analytics/risk-trend`: Monthly risk and PR volume breakdown.
+- `GET /api/dashboard/settings`: Retrieve managed repository list.
+- `GET /api/dashboard/review/:id`: Fetch detailed review and issue list.
 
-### `GET /health`
-Health check endpoint.
+### Policy Engine
+- `GET /api/policies/:repoId`: Get repository-specific enforcement rules.
+- `PUT /api/policies/:repoId`: Update blocking thresholds (Admin only).
 
-### `GET /prompt/last`
-View the last generated LLM prompt.
-
-### `GET /` (Dashboard)
-Access the web dashboard for managing repository settings and viewing review history.
-
-### `GET /api/dashboard/settings`
-Get all repository settings.
-
-### `PUT /api/dashboard/settings/:repository`
-Update repository settings (strictMode, ignoreStyling, ignoreLinter, enabled).
-
-### `GET /api/dashboard/history`
-Get review history with optional filters.
-
-### `GET /api/dashboard/statistics`
-Get review statistics.
-
-## 🔄 Processing Pipeline
-
-1. **Webhook Validation** → Verify signature and headers
-2. **Fetch PR Diff** → Get file changes from GitHub API
-3. **Clean Diff** → Remove metadata, keep only code changes
-4. **Generate Prompt** → Create LLM-ready prompt with cleaned diffs
-
-## 📦 Output Format
-
-```json
-{
-  "repository": "owner/repo",
-  "pullRequestNumber": 123,
-  "cleanedDiff": [
-    {
-      "filename": "path/to/file.js",
-      "language": "javascript",
-      "changes": "// code changes only",
-      "status": "modified",
-      "additions": 10,
-      "deletions": 5
-    }
-  ],
-  "llmPrompt": {
-    "prompt": "# Code Review Request...",
-    "estimatedTokens": 1500,
-    "fileCount": 4
-  }
-}
-```
-
-## 🏗️ Project Structure
-
-```
-GitGuard/
-├── server.js           # Express server & webhook handler
-├── webhookHandler.js   # Webhook validation
-├── diffFetcher.js      # GitHub API integration
-├── diffCleaner.js      # Diff cleaning & structuring
-├── promptGenerator.js  # LLM prompt generation
-├── llmClient.js        # LLM API integration (Groq)
-├── commentBot.js       # GitHub review comment posting
-├── storage.js          # Repository settings & history storage
-├── dashboard.js        # Dashboard API routes
-├── logger.js           # Structured logging
-├── public/             # Dashboard web interface
-│   ├── index.html
-│   ├── styles.css
-│   └── dashboard.js
-└── package.json
-```
+---
 
 ## 🔒 Security
+- **HMAC Signatures**: Every GitHub payload is verified.
+- **Dynamic Token Rotation**: No static tokens used; GitHub App installation tokens are refreshed on-demand.
+- **RBAC Enforcement**: Middleware validates user roles before processing administrative requests.
 
-- HMAC SHA-256 signature validation
-- Timing-safe comparison
-- Event filtering (only `pull_request` opened/reopened)
-- Secret detection in diffs
-
-## 📊 Dashboard Features (Week 4)
-
-Access the dashboard at `http://localhost:3000` after starting the server.
-
-**Repository Settings:**
-- **Strict Mode**: More aggressive code review
-- **Ignore Styling**: Skip formatting/style checks
-- **Ignore Linter**: Skip linter warnings
-- **Enable/Disable**: Toggle reviews per repository
-
-**Review History:**
-- View all past reviews
-- Filter by repository
-- See review details and timestamps
-
-**Statistics:**
-- Total reviews count
-- Issues by type (Bug, Security, Performance, Quality)
-- Repository statistics
-
-## 🐛 Troubleshooting
-
-**Webhook fails:**
-- Verify `GITHUB_WEBHOOK_SECRET` matches GitHub webhook secret
-
-**Diff fetching fails:**
-- Check `GITHUB_TOKEN` is set and has correct scopes
-- Ensure token has repository access
-
-**Server won't start:**
-- Node.js >= 18.0.0 required
-- Port 3000 available
-- Dependencies installed (`npm install`)
+---
 
 ## 📄 License
-
-MIT
+MIT © GitGuard AI Team

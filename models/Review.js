@@ -1,20 +1,19 @@
 const mongoose = require('mongoose');
 
 const reviewSchema = new mongoose.Schema({
-    repository: { type: String, required: true },
-    pullRequestNumber: { type: Number, required: true },
+    repositoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Repository', required: true },
+    prNumber: { type: Number, required: true },
     title: String,
     author: String,
-    summary: String,
-    riskScore: { type: Number, default: 0 },
-    status: { type: String, enum: ['pending', 'completed', 'failed'], default: 'pending' },
-    usage: {
-        promptTokens: Number,
-        completionTokens: Number,
-        totalTokens: Number
-    },
+    riskScore: { type: Number, default: 0, index: true },
+    totalTokens: { type: Number, default: 0 },
     processingTimeMs: Number,
-    createdAt: { type: Date, default: Date.now }
+    status: { type: String, enum: ['clean', 'issues', 'partial', 'pending', 'failed'], default: 'pending' },
+    policyDecisionCache: {
+        isBlocked: { type: Boolean, default: false },
+        blockingReason: String
+    },
+    createdAt: { type: Date, default: Date.now, index: true }
 });
 
 module.exports = mongoose.model('Review', reviewSchema);
