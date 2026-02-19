@@ -107,6 +107,9 @@ function setupTabs() {
 function setupEventListeners() {
     const refreshSettings = document.getElementById('refresh-settings');
     const refreshHistory = document.getElementById('refresh-history');
+    const historyFilter = document.getElementById('history-repo-filter');
+    const statsFilter = document.getElementById('stats-repo-filter');
+
     if (refreshSettings) refreshSettings.addEventListener('click', loadSettings);
     if (refreshHistory) refreshHistory.addEventListener('click', loadHistory);
     if (historyFilter) historyFilter.addEventListener('change', loadHistory);
